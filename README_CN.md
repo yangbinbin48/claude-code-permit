@@ -1,94 +1,73 @@
 # claude-code-permit
 
-[English](README.md) | 中文
+> 为 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 打造的 AI 自动权限审核 Hook。
 
-为 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 打造的 AI 自动权限审核 Hook。使用第二个 LLM 自动审批或升级工具调用请求，并通过会话级权限授予减少重复询问。
+[English](README.md) | [中文](README_CN.md)
 
-## 为什么需要它？
+受够了每次会话点几百次"允许"？**claude-code-permit** 使用第二个 LLM 自动审核权限请求 —— 安全操作自动放行并授予会话级权限，危险操作降级为手动确认。
 
-Claude Code 在执行 Shell 命令、访问项目外文件、抓取网页等操作前都会弹出权限确认。这对安全很有帮助，但在专注开发时反复点击"允许"会打断工作流。
+## 特性
 
-**claude-code-permit** 引入一个 AI 审核员，自动评估每个权限请求：
-- 审核通过 → 自动放行 + 授予会话级权限（等效于用户选择"始终允许"）
-- 审核拒绝 / 超时 / 出错 → 降级为手动确认弹窗，不会阻断工作
+- **零延迟本地检查** —— 内部工具和项目内文件操作即时放行，无需网络请求
+- **AI 智能审核** —— Bash 命令、外部文件访问、网页抓取等由第二个 LLM 评估
+- **会话级权限** —— 同类操作审核通过后，本次会话内不再重复询问（等效于"始终允许"）
+- **优雅降级** —— LLM 不可用时（限流、认证过期、超时）自动降级为手动确认，不会阻断工作
+- **可插拔 Provider** —— 内置 Codex CLI（ChatGPT 订阅）、Anthropic API、OpenAI API，易于扩展
+- **零依赖** —— 纯 Python 标准库，无需 pip install
 
-## 工作原理
-
-系统由两个 Claude Code Hook 协同工作：
+## 架构
 
 ```
 工具调用
-  │
-  ▼
-┌─────────────────────────────┐
-│  PreToolUse (local_check)   │  本地快速判断，无网络请求
-│  ─────────────────────────  │
-│  内部工具 → 直接放行         │
-│  工作目录内文件操作 → 放行   │
-│  其他 → 交给权限系统         │
-└──────────────┬──────────────┘
-               │ "ask"
-               ▼
-┌─────────────────────────────┐
-│  Claude Code 权限系统        │  检查是否已有会话级权限
-│                             │  有 → 直接放行
-└──────────────┬──────────────┘
-               │ 无会话级权限
-               ▼
-┌─────────────────────────────┐
-│  PermissionRequest          │  调用 LLM 审核
-│  (permission_reviewer)      │
-│  ─────────────────────────  │
-│  LLM 通过 → 放行 +          │
-│    授予会话级权限            │
-│  LLM 拒绝 → 弹出手动确认    │
-│  出错/超时 → 弹出手动确认    │
-└─────────────────────────────┘
+  |
+  v
++-----------------------------+
+|  PreToolUse (local_check)   |  本地快速判断，无网络请求
+|  - 内部工具 -> 直接放行      |
+|  - 工作目录内文件 -> 放行    |
+|  - 其他 -> 交给权限系统      |
++-------------+---------------+
+              | "ask"
+              v
++-----------------------------+
+|  Claude Code 权限系统        |  检查已有会话级权限
+|                             |  有 -> 直接放行
++-------------+---------------+
+              | 无会话级权限
+              v
++-----------------------------+
+|  PermissionRequest          |  调用 LLM 审核
+|  (permission_reviewer)      |
+|  - 通过 -> 放行 +           |
+|    授予会话级权限            |
+|  - 拒绝 -> 弹出手动确认     |
+|  - 出错/超时 -> 手动确认     |
++-----------------------------+
 ```
 
-**核心设计：**
-- **两层架构**：本地检查处理绝大多数工具调用（零延迟），LLM 审核仅在真正需要弹窗时才运行
-- **会话级权限**：LLM 通过审核后会授予会话级权限（等效于"始终允许"），同类操作在本次会话中只审核一次
-- **优雅降级**：LLM 不可用时（限流、认证过期、超时）自动降级为手动确认，不会阻断工作
-
-## 项目结构
-
-```
-claude-code-permit/
-├── local_check.py           # PreToolUse Hook — 本地快速判断
-├── permission_reviewer.py   # PermissionRequest Hook — AI 审核
-├── providers/
-│   ├── __init__.py          # Provider 注册表
-│   ├── codex.py             # Codex CLI（ChatGPT 订阅）
-│   ├── anthropic_api.py     # Anthropic API
-│   └── openai_api.py        # OpenAI API（+ 兼容 API）
-└── .gitignore
-```
-
-## 安装
+## 快速开始
 
 ### 1. 克隆仓库
 
 ```bash
-git clone https://github.com/user/claude-code-permit.git
+git clone https://github.com/ltz1990/claude-code-permit.git
 cd claude-code-permit
 ```
 
-### 2. 配置 LLM Provider
+### 2. 选择 LLM Provider
 
-选择以下任一方式：
-
-#### 方式 A：Codex CLI（默认）— 使用 ChatGPT 订阅，无需 API Key
+<details>
+<summary><b>Codex CLI</b>（默认）—— ChatGPT 订阅，无需 API Key</summary>
 
 ```bash
-# 安装 Codex CLI
-npm install -g @anthropic-ai/codex  # 或参考 https://github.com/openai/codex
-
-# 登录 ChatGPT 账号
+npm install -g @openai/codex
 codex login
 ```
 
-#### 方式 B：Anthropic API
+</details>
+
+<details>
+<summary><b>Anthropic API</b></summary>
 
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
@@ -96,7 +75,10 @@ export PERMIT_PROVIDER="anthropic"
 # 可选：export ANTHROPIC_MODEL="claude-sonnet-4-5-20250514"
 ```
 
-#### 方式 C：OpenAI API
+</details>
+
+<details>
+<summary><b>OpenAI API</b></summary>
 
 ```bash
 export OPENAI_API_KEY="sk-..."
@@ -104,7 +86,10 @@ export PERMIT_PROVIDER="openai"
 # 可选：export OPENAI_MODEL="gpt-4o-mini"
 ```
 
-#### 方式 D：OpenAI 兼容 API（DeepSeek、本地模型等）
+</details>
+
+<details>
+<summary><b>OpenAI 兼容 API</b>（DeepSeek、本地模型等）</summary>
 
 ```bash
 export OPENAI_API_KEY="your-key"
@@ -113,9 +98,11 @@ export OPENAI_MODEL="deepseek-chat"
 export PERMIT_PROVIDER="openai"
 ```
 
+</details>
+
 ### 3. 配置 Claude Code Hooks
 
-在 `~/.claude/settings.json`（或项目级 `.claude/settings.json`）中添加：
+在 `~/.claude/settings.json`（全局）或 `.claude/settings.json`（项目级）中添加：
 
 ```json
 {
@@ -126,7 +113,7 @@ export PERMIT_PROVIDER="openai"
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /你的绝对路径/claude-code-permit/local_check.py",
+            "command": "python3 /你的路径/claude-code-permit/local_check.py",
             "timeout": 5
           }
         ]
@@ -138,7 +125,7 @@ export PERMIT_PROVIDER="openai"
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /你的绝对路径/claude-code-permit/permission_reviewer.py",
+            "command": "python3 /你的路径/claude-code-permit/permission_reviewer.py",
             "timeout": 30
           }
         ]
@@ -148,7 +135,9 @@ export PERMIT_PROVIDER="openai"
 }
 ```
 
-将 `/你的绝对路径/claude-code-permit/` 替换为仓库实际克隆路径。
+> 将 `/你的路径/claude-code-permit/` 替换为实际克隆路径。
+
+配置完成，启动 Claude Code 会话即可自动审核权限。
 
 ## 配置项
 
@@ -156,94 +145,102 @@ export PERMIT_PROVIDER="openai"
 
 | 变量 | 是否必须 | 默认值 | 说明 |
 |---|---|---|---|
-| `PERMIT_PROVIDER` | 否 | `codex` | LLM Provider：`codex`、`anthropic` 或 `openai` |
+| `PERMIT_PROVIDER` | 否 | `codex` | Provider：`codex`、`anthropic` 或 `openai` |
 | `ANTHROPIC_API_KEY` | 使用 `anthropic` 时 | — | Anthropic API Key |
 | `ANTHROPIC_MODEL` | 否 | `claude-sonnet-4-5-20250514` | Anthropic 模型 ID |
 | `OPENAI_API_KEY` | 使用 `openai` 时 | — | OpenAI API Key |
 | `OPENAI_MODEL` | 否 | `gpt-4o-mini` | OpenAI 模型 ID |
-| `OPENAI_BASE_URL` | 否 | `https://api.openai.com/v1/chat/completions` | 自定义端点（用于兼容 API） |
+| `OPENAI_BASE_URL` | 否 | OpenAI 默认 | 自定义端点（兼容 API） |
 
-### 审核规则
+### 本地自动放行（不调用 LLM）
 
-LLM 审核员使用内置 Prompt，遵循以下规则：
+| 类别 | 示例 |
+|---|---|
+| 内部工具 | `Task`、`WebSearch`、`AskUserQuestion`、`EnterPlanMode`、`TaskCreate` 等 |
+| 工作目录内文件操作 | `Read`、`Write`、`Edit`、`Glob`、`Grep`、`NotebookEdit` 且目标在项目内 |
 
-- **放行**：构建/测试/lint、git 常规操作、包管理、开发服务器、项目构建工具、文档网站访问
-- **拒绝**：破坏性操作（`rm -rf /`、`git push --force`）、访问密钥文件、可疑网络请求、系统级修改、访问项目外敏感文件
-- **默认**：不确定时倾向放行 — 开发者在自己的机器上工作
+### AI 审核范围
 
-可通过编辑 `permission_reviewer.py` 中的 `REVIEW_PROMPT_TEMPLATE` 自定义审核规则。
+其他所有操作 —— 包括 `Bash` 命令、项目外文件操作、`WebFetch` 等。审核规则：
 
-### 本地检查规则
+| 决策 | 条件 |
+|---|---|
+| **放行** | 构建/测试/lint、git 常规操作、包管理、开发服务器、文档网站访问 |
+| **拒绝** | `rm -rf /`、`git push --force` 到 main、访问密钥、可疑网络请求、系统配置修改 |
+| **默认** | 不确定时倾向放行 —— 开发者在自己的机器上工作 |
 
-PreToolUse Hook（`local_check.py`）自动放行：
-- Claude Code 内部工具：`Task`、`WebSearch`、`AskUserQuestion`、`EnterPlanMode` 等
-- 目标路径在当前工作目录内的文件操作（`Read`、`Write`、`Edit`、`Glob`、`Grep`、`NotebookEdit`）
-
-其他操作交给 Claude Code 权限系统处理，可能触发 AI 审核。
+可通过编辑 `permission_reviewer.py` 中的 `REVIEW_PROMPT_TEMPLATE` 自定义规则。
 
 ## 日志
 
-所有权限决策记录在当前工作目录下的 `.claude_permission.log` 中：
+所有决策记录在项目目录下的 `.claude_permission.log`：
 
 ```
-[2026-02-20 22:28:26] tool=Read decision=allow reason=目标在工作目录内 detail=/project/src/main.py
-[2026-02-20 22:28:35] tool=Bash decision=allow+session reason=常规开发命令 detail=npm run build
-[2026-02-20 22:28:40] tool=Bash decision=manual(deny) reason=破坏性操作 detail=rm -rf /
+[2026-02-20 14:30:01] tool=Edit decision=allow reason=Target within cwd detail=src/main.py
+[2026-02-20 14:30:15] tool=Bash decision=allow+session reason=Standard build detail=npm run build
+[2026-02-20 14:30:22] tool=Bash decision=manual(deny) reason=Destructive op detail=rm -rf /
 ```
 
 此文件已在 `.gitignore` 中排除，不会被提交。
 
+## 项目结构
+
+```
+claude-code-permit/
+├── local_check.py           # PreToolUse Hook — 本地快速判断
+├── permission_reviewer.py   # PermissionRequest Hook — AI 审核
+├── providers/
+│   ├── __init__.py          # Provider 注册表
+│   ├── codex.py             # Codex CLI（ChatGPT 订阅）
+│   ├── anthropic_api.py     # Anthropic API（纯标准库）
+│   └── openai_api.py        # OpenAI API（+ 兼容 API）
+└── .gitignore
+```
+
 ## 添加自定义 Provider
 
-在 `providers/` 下新建文件，实现 `review` 函数：
+1. 创建 `providers/my_provider.py`：
 
 ```python
-# providers/my_provider.py
-
 def review(prompt: str, timeout: int = 25) -> str:
     """
-    将审核 prompt 发送给你的 LLM 并返回原始响应文本。
+    将审核 prompt 发送给 LLM 并返回原始响应文本。
+    响应须包含 JSON：{"decision": "approve"|"deny", "reason": "..."}
 
-    参数:
-        prompt: 包含工具调用详情的审核 prompt
-        timeout: 最大等待秒数
-
-    返回:
-        LLM 原始响应文本（须包含 "decision" 和 "reason" 的 JSON）
-
-    异常:
-        RuntimeError: 服务错误（触发不可用冷却期）
-        subprocess.TimeoutExpired: 超时
+    服务错误抛出 RuntimeError，超时抛出 subprocess.TimeoutExpired。
     """
-    # 你的实现
     ...
 ```
 
-然后在 `providers/__init__.py` 中注册：
+2. 在 `providers/__init__.py` 中注册：
 
 ```python
 from providers.my_provider import review as my_review
 
 PROVIDERS = {
-    # ...已有 providers...
+    ...
     "my_provider": my_review,
 }
 ```
 
-设置 `PERMIT_PROVIDER=my_provider` 即可使用。
+3. 设置 `PERMIT_PROVIDER=my_provider`。
 
 ## 系统要求
 
-- Python 3.10+（使用了 `str | None` 类型语法）
-- 无外部 Python 依赖（仅使用标准库）
+- Python 3.10+
+- 无外部依赖（纯标准库）
 - 已配置至少一个 LLM Provider
 
 ## 已知限制
 
-- 会话级权限仅在当前会话有效，重启 Claude Code 后重置
-- Provider 不可用冷却期为 10 分钟（可在 `permission_reviewer.py` 中修改 `UNAVAILABLE_TTL`）
+- 会话级权限在 Claude Code 重启后重置
+- Provider 不可用冷却期：10 分钟（可通过 `UNAVAILABLE_TTL` 配置）
 - 超大工具输入会被截断至 3000 字符
 
 ## 许可证
 
 MIT
+
+## 参与贡献
+
+欢迎在 [github.com/ltz1990/claude-code-permit](https://github.com/ltz1990/claude-code-permit) 提交 Issue 和 PR。

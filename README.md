@@ -1,90 +1,73 @@
 # claude-code-permit
 
-AI-powered permission auto-review hook for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Uses a secondary LLM to automatically approve or escalate tool calls, with session-level permission granting to minimize repeated prompts.
+> AI-powered permission auto-review hook for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
 
-## Why?
+[English](README.md) | [中文](README_CN.md)
 
-Claude Code asks for permission before running shell commands, accessing files outside the project, fetching URLs, etc. This is great for safety, but can be disruptive during focused development sessions where you're approving the same types of operations repeatedly.
+Tired of clicking "Allow" hundreds of times per session? **claude-code-permit** uses a secondary LLM to automatically review permission requests — approving safe operations with session-level persistence, and falling back to manual confirmation for anything risky.
 
-**claude-code-permit** adds an AI reviewer that automatically evaluates each permission request and either approves it (with session-level "don't ask again" persistence) or falls back to the normal manual dialog.
+## Features
 
-## How It Works
+- **Zero-latency local checks** — Internal tools and in-project file operations are auto-approved instantly, no network needed
+- **AI-powered review** — Bash commands, external file access, web fetches, etc. are evaluated by a secondary LLM
+- **Session-level permissions** — Once approved, the same type of operation won't be asked again in the current session (equivalent to "Yes, don't ask again")
+- **Graceful degradation** — If the LLM provider is down (rate limit, auth expired, timeout), falls back to manual confirmation instead of blocking
+- **Pluggable providers** — Ships with Codex CLI (ChatGPT subscription), Anthropic API, and OpenAI API. Easy to add your own
+- **No dependencies** — Pure Python stdlib, no pip install needed
 
-The system uses two Claude Code hooks working together:
+## Architecture
 
 ```
 Tool call
-  │
-  ▼
-┌─────────────────────────────┐
-│  PreToolUse (local_check)   │  Fast, no network
-│  ─────────────────────────  │
-│  Internal tools → allow     │
-│  File ops in cwd → allow    │
-│  Everything else → ask      │
-└──────────────┬──────────────┘
-               │ "ask"
-               ▼
-┌─────────────────────────────┐
-│  Claude Code Permission     │  Checks session permissions
-│  System                     │  already granted → allow
-└──────────────┬──────────────┘
-               │ no session permission
-               ▼
-┌─────────────────────────────┐
-│  PermissionRequest          │  Calls LLM provider
-│  (permission_reviewer)      │
-│  ─────────────────────────  │
-│  LLM approves → allow +    │
-│    grant session permission │
-│  LLM denies → manual dialog│
-│  Error/timeout → manual     │
-└─────────────────────────────┘
+  |
+  v
++-----------------------------+
+|  PreToolUse (local_check)   |  Fast, no network
+|  - Internal tools -> allow  |
+|  - File ops in cwd -> allow |
+|  - Everything else -> ask   |
++-------------+---------------+
+              | "ask"
+              v
++-----------------------------+
+|  Claude Code Permission     |  Checks existing session
+|  System                     |  permissions -> allow
++-------------+---------------+
+              | no session permission found
+              v
++-----------------------------+
+|  PermissionRequest          |  Calls LLM provider
+|  (permission_reviewer)      |
+|  - Approve -> allow +       |
+|    grant session permission |
+|  - Deny -> manual dialog    |
+|  - Error/timeout -> manual  |
++-----------------------------+
 ```
 
-**Key design decisions:**
-- **Two-layer architecture**: Fast local checks handle the majority of tool calls with zero latency. The LLM reviewer only runs when the permission dialog would actually appear.
-- **Session-level permissions**: When the LLM approves a tool call, the hook grants a session-level permission (equivalent to the user selecting "Yes, don't ask again"). This means the LLM only reviews each *type* of operation once per session.
-- **Graceful degradation**: If the LLM provider is unavailable (rate limit, auth expired, timeout), the hook falls back to the normal manual permission dialog — never blocks your workflow.
+## Quick Start
 
-## Project Structure
-
-```
-claude-code-permit/
-├── local_check.py           # PreToolUse hook — fast local decisions
-├── permission_reviewer.py   # PermissionRequest hook — AI review
-├── providers/
-│   ├── __init__.py          # Provider registry
-│   ├── codex.py             # Codex CLI (ChatGPT subscription)
-│   ├── anthropic_api.py     # Anthropic API
-│   └── openai_api.py        # OpenAI API (+ compatible APIs)
-└── .gitignore
-```
-
-## Installation
-
-### 1. Clone the repository
+### 1. Clone
 
 ```bash
-git clone https://github.com/user/claude-code-permit.git
+git clone https://github.com/ltz1990/claude-code-permit.git
 cd claude-code-permit
 ```
 
-### 2. Set up an LLM provider
+### 2. Choose an LLM Provider
 
-Choose one of the supported providers:
-
-#### Option A: Codex CLI (default) — uses ChatGPT subscription, no API key
+<details>
+<summary><b>Codex CLI</b> (default) — ChatGPT subscription, no API key</summary>
 
 ```bash
-# Install Codex CLI
-npm install -g @anthropic-ai/codex  # or see https://github.com/openai/codex
-
-# Log in with your ChatGPT account
+npm install -g @openai/codex
 codex login
 ```
 
-#### Option B: Anthropic API
+</details>
+
+<details>
+<summary><b>Anthropic API</b></summary>
 
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
@@ -92,7 +75,10 @@ export PERMIT_PROVIDER="anthropic"
 # Optional: export ANTHROPIC_MODEL="claude-sonnet-4-5-20250514"
 ```
 
-#### Option C: OpenAI API
+</details>
+
+<details>
+<summary><b>OpenAI API</b></summary>
 
 ```bash
 export OPENAI_API_KEY="sk-..."
@@ -100,7 +86,10 @@ export PERMIT_PROVIDER="openai"
 # Optional: export OPENAI_MODEL="gpt-4o-mini"
 ```
 
-#### Option D: OpenAI-compatible APIs (DeepSeek, local models, etc.)
+</details>
+
+<details>
+<summary><b>OpenAI-compatible APIs</b> (DeepSeek, local models, etc.)</summary>
 
 ```bash
 export OPENAI_API_KEY="your-key"
@@ -109,9 +98,11 @@ export OPENAI_MODEL="deepseek-chat"
 export PERMIT_PROVIDER="openai"
 ```
 
-### 3. Configure Claude Code hooks
+</details>
 
-Add the following to your `~/.claude/settings.json` (or project-level `.claude/settings.json`):
+### 3. Configure Claude Code Hooks
+
+Add to `~/.claude/settings.json` (global) or `.claude/settings.json` (project-level):
 
 ```json
 {
@@ -122,7 +113,7 @@ Add the following to your `~/.claude/settings.json` (or project-level `.claude/s
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /absolute/path/to/claude-code-permit/local_check.py",
+            "command": "python3 /path/to/claude-code-permit/local_check.py",
             "timeout": 5
           }
         ]
@@ -134,7 +125,7 @@ Add the following to your `~/.claude/settings.json` (or project-level `.claude/s
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /absolute/path/to/claude-code-permit/permission_reviewer.py",
+            "command": "python3 /path/to/claude-code-permit/permission_reviewer.py",
             "timeout": 30
           }
         ]
@@ -144,7 +135,9 @@ Add the following to your `~/.claude/settings.json` (or project-level `.claude/s
 }
 ```
 
-Replace `/absolute/path/to/claude-code-permit/` with the actual path where you cloned the repository.
+> Replace `/path/to/claude-code-permit/` with the actual clone path.
+
+That's it. Start a Claude Code session and permissions will be auto-reviewed.
 
 ## Configuration
 
@@ -152,94 +145,102 @@ Replace `/absolute/path/to/claude-code-permit/` with the actual path where you c
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `PERMIT_PROVIDER` | No | `codex` | LLM provider: `codex`, `anthropic`, or `openai` |
+| `PERMIT_PROVIDER` | No | `codex` | Provider: `codex`, `anthropic`, or `openai` |
 | `ANTHROPIC_API_KEY` | For `anthropic` | — | Anthropic API key |
 | `ANTHROPIC_MODEL` | No | `claude-sonnet-4-5-20250514` | Anthropic model ID |
 | `OPENAI_API_KEY` | For `openai` | — | OpenAI API key |
 | `OPENAI_MODEL` | No | `gpt-4o-mini` | OpenAI model ID |
-| `OPENAI_BASE_URL` | No | `https://api.openai.com/v1/chat/completions` | Custom endpoint for compatible APIs |
+| `OPENAI_BASE_URL` | No | OpenAI default | Custom endpoint for compatible APIs |
 
-### Review Rules
+### What Gets Auto-Approved Locally (no LLM call)
 
-The LLM reviewer uses a built-in prompt with these rules:
+| Category | Examples |
+|---|---|
+| Internal tools | `Task`, `WebSearch`, `AskUserQuestion`, `EnterPlanMode`, `TaskCreate`, etc. |
+| File ops within cwd | `Read`, `Write`, `Edit`, `Glob`, `Grep`, `NotebookEdit` targeting project files |
 
-- **APPROVE**: build/test/lint, git operations, package management, dev servers, project build tools, documentation fetches
-- **DENY**: destructive operations (`rm -rf /`, `git push --force`), secret access, suspicious network activity, system-level modifications, file access outside the project
-- **Default**: When unsure, approve — the developer is working on their own machine
+### What Gets AI-Reviewed
 
-You can customize the review rules by editing the `REVIEW_PROMPT_TEMPLATE` in `permission_reviewer.py`.
+Everything else — including `Bash` commands, file operations outside the project, `WebFetch`, etc. The LLM reviewer follows these rules:
 
-### Local Check Rules
+| Decision | When |
+|---|---|
+| **APPROVE** | Build/test/lint, git operations, package management, dev servers, doc site fetches |
+| **DENY** | `rm -rf /`, `git push --force` to main, secret access, suspicious network, system config changes |
+| **Default** | When unsure, approve — you're working on your own machine |
 
-The PreToolUse hook (`local_check.py`) auto-allows:
-- Internal Claude Code tools: `Task`, `WebSearch`, `AskUserQuestion`, `EnterPlanMode`, etc.
-- File operations (`Read`, `Write`, `Edit`, `Glob`, `Grep`, `NotebookEdit`) targeting paths within the current working directory
-
-Everything else is delegated to Claude Code's permission system, which may trigger the AI reviewer.
+Customize rules by editing `REVIEW_PROMPT_TEMPLATE` in `permission_reviewer.py`.
 
 ## Logging
 
-All permission decisions are logged to `.claude_permission.log` in the current working directory:
+All decisions are logged to `.claude_permission.log` in your project directory:
 
 ```
-[2026-02-20 22:28:26] tool=Read decision=allow reason=Target within cwd detail=/project/src/main.py
-[2026-02-20 22:28:35] tool=Bash decision=allow+session reason=Standard dev command detail=npm run build
-[2026-02-20 22:28:40] tool=Bash decision=manual(deny) reason=Destructive operation detail=rm -rf /
+[2026-02-20 14:30:01] tool=Edit decision=allow reason=Target within cwd detail=src/main.py
+[2026-02-20 14:30:15] tool=Bash decision=allow+session reason=Standard build detail=npm run build
+[2026-02-20 14:30:22] tool=Bash decision=manual(deny) reason=Destructive op detail=rm -rf /
 ```
 
-This file is listed in `.gitignore` and won't be committed to your repository.
+This file is in `.gitignore` and won't be committed.
+
+## Project Structure
+
+```
+claude-code-permit/
+├── local_check.py           # PreToolUse hook — fast local decisions
+├── permission_reviewer.py   # PermissionRequest hook — AI review
+├── providers/
+│   ├── __init__.py          # Provider registry
+│   ├── codex.py             # Codex CLI (ChatGPT subscription)
+│   ├── anthropic_api.py     # Anthropic API (stdlib only)
+│   └── openai_api.py        # OpenAI API (+ compatible APIs)
+└── .gitignore
+```
 
 ## Adding a Custom Provider
 
-Create a new file in `providers/` implementing the `review` function:
+1. Create `providers/my_provider.py`:
 
 ```python
-# providers/my_provider.py
-
 def review(prompt: str, timeout: int = 25) -> str:
     """
     Send the review prompt to your LLM and return the raw response text.
+    Response must contain JSON: {"decision": "approve"|"deny", "reason": "..."}
 
-    Args:
-        prompt: The review prompt containing tool call details
-        timeout: Maximum seconds to wait
-
-    Returns:
-        Raw LLM response text (must contain JSON with "decision" and "reason")
-
-    Raises:
-        RuntimeError: On service errors (triggers unavailability cooldown)
-        subprocess.TimeoutExpired: On timeout
+    Raises RuntimeError on service errors, subprocess.TimeoutExpired on timeout.
     """
-    # Your implementation here
     ...
 ```
 
-Then register it in `providers/__init__.py`:
+2. Register in `providers/__init__.py`:
 
 ```python
 from providers.my_provider import review as my_review
 
 PROVIDERS = {
-    # ...existing providers...
+    ...
     "my_provider": my_review,
 }
 ```
 
-Set `PERMIT_PROVIDER=my_provider` to use it.
+3. Set `PERMIT_PROVIDER=my_provider`.
 
 ## Requirements
 
-- Python 3.10+ (uses `str | None` type syntax)
-- No external Python dependencies (stdlib only)
-- One of the supported LLM providers configured
+- Python 3.10+
+- No external dependencies (stdlib only)
+- One configured LLM provider
 
 ## Limitations
 
-- Session permissions are per-session — they reset when you restart Claude Code
-- The unavailability cooldown is 10 minutes (configurable via `UNAVAILABLE_TTL` in `permission_reviewer.py`)
-- The review prompt is truncated to 3000 characters for very large tool inputs
+- Session permissions reset when Claude Code restarts
+- Provider unavailability cooldown: 10 minutes (configurable via `UNAVAILABLE_TTL`)
+- Large tool inputs are truncated to 3000 characters for the review prompt
 
 ## License
 
 MIT
+
+## Contributing
+
+Issues and PRs welcome at [github.com/ltz1990/claude-code-permit](https://github.com/ltz1990/claude-code-permit).
