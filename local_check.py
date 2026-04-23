@@ -41,7 +41,7 @@ FILE_TOOL_PATH_FIELDS = {
 ALWAYS_ALLOW_TOOLS = {
     "Task", "WebSearch",
     "TaskCreate", "TaskUpdate", "TaskGet", "TaskList", "TaskStop",
-    "AskUserQuestion", "EnterPlanMode", "ExitPlanMode",
+    "EnterPlanMode", "ExitPlanMode",
     "EnterWorktree", "Skill", "TaskOutput",
 }
 
