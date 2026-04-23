@@ -126,6 +126,12 @@ def main():
 
     detail = tool_input.get("command", "") or tool_input.get("file_path", "") or tool_input.get("url", "")
 
+    # AskUserQuestion 必须由用户手动回答，不能自动批准
+    if tool_name == "AskUserQuestion":
+        write_log(cwd, tool_name, "manual(deny)", "AskUserQuestion must be answered by user", detail)
+        print("[Reviewer denied] AskUserQuestion requires manual user interaction", file=sys.stderr)
+        sys.exit(1)
+
     # Select provider
     provider_name = os.environ.get("PERMIT_PROVIDER", "codex")
     review_fn = PROVIDERS.get(provider_name)
