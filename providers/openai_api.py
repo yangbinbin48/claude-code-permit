@@ -22,11 +22,13 @@ def review(prompt: str, timeout: int = 25) -> str:
     model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
     base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1/chat/completions")
 
-    request_body = json.dumps({
+    body = {
         "model": model,
-        "max_tokens": 200,
-        "messages": [{"role": "user", "content": prompt}]
-    }).encode("utf-8")
+        "max_tokens": 512,
+        "messages": [{"role": "user", "content": prompt}],
+        "thinking": {"type": "disabled"},
+    }
+    request_body = json.dumps(body).encode("utf-8")
 
     req = urllib.request.Request(
         base_url,
@@ -40,7 +42,11 @@ def review(prompt: str, timeout: int = 25) -> str:
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            message = data.get("choices", [{}])[0].get("message", {})
+            content = message.get("content", "")
+            if not content:
+                content = message.get("reasoning_content", "")
+            return content
     except urllib.error.HTTPError as e:
         try:
             body = e.read().decode("utf-8")[:200]
