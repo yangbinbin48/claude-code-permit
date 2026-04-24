@@ -185,10 +185,10 @@ def main():
         sys.exit(1)
     except RuntimeError as e:
         error_msg = str(e)[:200]
-        # Only mark unavailable for service-level errors (auth, rate-limit, server errors)
-        # Transient errors (400, network issues) should NOT trigger cooldown
-        _service_signals = ["401", "403", "429", "500", "502", "503", "rate limit",
-                           "unauthorized", "quota", "billing", "service error"]
+        # Only mark unavailable for persistent service errors (auth, billing)
+        # Rate limits (429) are transient for free-tier models and should NOT trigger cooldown
+        _service_signals = ["401", "403", "500", "502", "503",
+                           "unauthorized", "quota", "billing"]
         is_service_error = any(s in error_msg.lower() for s in _service_signals)
         if is_service_error:
             mark_unavailable(error_msg)
