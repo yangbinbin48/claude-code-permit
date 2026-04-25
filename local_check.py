@@ -41,10 +41,13 @@ FILE_TOOL_PATH_FIELDS = {
 }
 
 ALWAYS_ALLOW_TOOLS = {
-    "Task", "WebSearch",
+    "Task", "WebSearch", "Agent",
     "TaskCreate", "TaskUpdate", "TaskGet", "TaskList", "TaskStop",
     "EnterPlanMode", "ExitPlanMode",
     "EnterWorktree", "Skill", "TaskOutput",
+    "SendMessage", "TeamCreate", "TeamDelete",
+    "CronCreate", "CronDelete", "CronList",
+    "ScheduleWakeup",
 }
 
 
@@ -103,8 +106,15 @@ SAFE_COMMANDS = frozenset({
     "whoami", "id", "env", "printenv", "date", "uptime",
     # 包管理（只读）
     "pip", "pip3", "dpkg", "rpm", "dnf",
+    # shell 内建（安全）
+    "cd", "pwd", "export", "source", "bash", "sh", "zsh",
+    # 构建/运行工具
+    "make", "cmake", "docker", "kubectl", "helm",
+    "yarn", "bun", "deno",
     # 其他安全命令
     "jq", "yq", "xargs", "tee", "mkdir", "test", "[", "true", "false",
+    "touch", "cp", "mv", "chmod", "chown",
+    "curl", "wget", "tar", "unzip", "gzip",
 })
 
 DENY_PATTERNS = (
