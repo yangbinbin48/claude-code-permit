@@ -127,6 +127,19 @@ DENY_PATTERNS = (
     r"wget\s+.*\|\s*sh",
 )
 
+# MCP 工具安全前缀：只读/搜索/分析类工具，无需 AI 审核
+SAFE_MCP_PREFIXES = (
+    "mcp__plugin_claude-mem_mcp-search__",   # claude-mem 代码搜索
+    "mcp__zread__",                           # GitHub 仓库只读
+    "mcp__web-search-prime__",                # Web 搜索
+    "mcp__web-reader__",                      # Web 读取
+    "mcp__web_reader__",                      # Web 读取（别名）
+    "mcp__zai-mcp-server__",                  # AI 图像/数据分析
+    "mcp__4_5v_mcp__",                        # 图像分析
+    "mcp__plugin_playwright_playwright__",    # Playwright 浏览器
+    "mcp__plugin_superpowers-chrome_chrome__", # Chrome 浏览器
+)
+
 
 def _is_safe_bash(command: str) -> bool:
     """判断 Bash 命令是否安全可放行。"""
@@ -176,6 +189,13 @@ def main():
             write_log(cwd, tool_name, "allow", "已知安全命令", command)
             output("allow", f"[本地放行] {command[:60]}")
             return
+
+    # MCP：已知安全的只读工具前缀直接放行
+    if any(tool_name.startswith(prefix) for prefix in SAFE_MCP_PREFIXES):
+        detail = tool_input.get("file_path", "") or tool_input.get("url", "") or ""
+        write_log(cwd, tool_name, "allow", "MCP只读工具", detail)
+        output("allow", f"[本地放行] MCP: {tool_name}")
+        return
 
     # 其他：交给权限系统（→ 可能触发 PermissionRequest）
     detail = tool_input.get("command", "") or tool_input.get("file_path", "") or tool_input.get("url", "")
