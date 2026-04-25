@@ -9,6 +9,8 @@ PreToolUse Hook: 本地快速判断（不走网络）
 
 import json
 import os
+import re
+import shlex
 import sys
 from datetime import datetime
 
@@ -65,6 +67,71 @@ def output(decision: str, reason: str):
     }))
 
 
+def _extract_commands(command: str) -> list[str]:
+    """从管道/链式命令中提取各段的首命令。"""
+    # 简单拆分管道和 &&/||，不处理引号内的分隔符（够用）
+    parts = re.split(r'\||&&|\|\|;', command)
+    result = []
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        # 去掉重定向
+        part = re.split(r'[<>]', part)[0].strip()
+        # 取第一个词作为命令名
+        tokens = shlex.split(part)
+        if tokens:
+            result.append(tokens[0])
+    return result
+
+
+SAFE_COMMANDS = frozenset({
+    # 文件查看
+    "ls", "cat", "tree", "head", "tail", "less", "more", "file", "stat",
+    # 搜索
+    "grep", "egrep", "fgrep", "find", "rg", "ag", "ack", "which", "whereis",
+    # 文本处理（只读）
+    "wc", "sort", "uniq", "cut", "tr", "awk", "sed", "diff", "comm",
+    # echo
+    "echo", "printf",
+    # git 只读
+    "git",
+    # 版本查询
+    "python3", "python", "node", "npm", "pnpm", "npx", "go", "rustc", "cargo",
+    # 系统（只读）
+    "ps", "pgrep", "netstat", "ss", "lsof", "ip", "uname", "hostname",
+    "whoami", "id", "env", "printenv", "date", "uptime",
+    # 包管理（只读）
+    "pip", "pip3", "dpkg", "rpm", "dnf",
+    # 其他安全命令
+    "jq", "yq", "xargs", "tee", "mkdir", "test", "[", "true", "false",
+})
+
+DENY_PATTERNS = (
+    r"rm\s+-rf\s+/",
+    r"sudo\s+rm",
+    r">\s*/etc/",
+    r"chmod\s+777",
+    r"git\s+push\s+.*--force",
+    r"curl\s+.*\|\s*sh",
+    r"wget\s+.*\|\s*sh",
+)
+
+
+def _is_safe_bash(command: str) -> bool:
+    """判断 Bash 命令是否安全可放行。"""
+    # 拒绝危险模式
+    for pat in DENY_PATTERNS:
+        if re.search(pat, command):
+            return False
+
+    cmds = _extract_commands(command)
+    if not cmds:
+        return True  # 空命令
+
+    return all(c in SAFE_COMMANDS for c in cmds)
+
+
 def main():
     input_data = json.loads(sys.stdin.read())
     cwd = input_data.get("cwd", "")
@@ -90,6 +157,14 @@ def main():
         if is_within_cwd(target_path, cwd):
             write_log(cwd, tool_name, "allow", "目标在工作目录内", target_path)
             output("allow", "[本地放行] 目标在工作目录内")
+            return
+
+    # Bash: 已知安全命令直接放行
+    if tool_name == "Bash":
+        command = tool_input.get("command", "").strip()
+        if _is_safe_bash(command):
+            write_log(cwd, tool_name, "allow", "已知安全命令", command)
+            output("allow", f"[本地放行] {command[:60]}")
             return
 
     # 其他：交给权限系统（→ 可能触发 PermissionRequest）

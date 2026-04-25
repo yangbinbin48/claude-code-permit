@@ -157,48 +157,55 @@ def main():
         tool_input=input_str
     )
 
-    # Call provider
-    try:
-        response = review_fn(prompt, timeout=25)
-        decision, reason = parse_decision(response)
+    # Call provider with retry (3 attempts: immediate, 1s, 2s)
+    max_attempts = 3
+    retry_delays = [0, 1, 2]
+    last_error = None
 
-        if decision == "approve":
-            write_log(cwd, tool_name, "allow+session", reason, detail)
-            output = {
-                "hookSpecificOutput": {
-                    "hookEventName": "PermissionRequest",
-                    "decision": {
-                        "behavior": "allow",
-                        "updatedPermissions": permission_suggestions
+    for attempt in range(max_attempts):
+        if attempt > 0:
+            time.sleep(retry_delays[attempt])
+        try:
+            response = review_fn(prompt, timeout=25)
+            decision, reason = parse_decision(response)
+
+            if decision == "approve":
+                write_log(cwd, tool_name, "allow+session", reason, detail)
+                output = {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PermissionRequest",
+                        "decision": {
+                            "behavior": "allow",
+                            "updatedPermissions": permission_suggestions
+                        }
                     }
                 }
-            }
-            print(json.dumps(output))
-        else:
-            write_log(cwd, tool_name, "manual(deny)", reason, detail)
-            print(f"[Reviewer denied] {reason}", file=sys.stderr)
-            sys.exit(1)
+                print(json.dumps(output))
+            else:
+                write_log(cwd, tool_name, "manual(deny)", reason, detail)
+                print(f"[Reviewer denied] {reason}", file=sys.stderr)
+                sys.exit(1)
+            break  # success
 
-    except subprocess.TimeoutExpired:
-        write_log(cwd, tool_name, "manual(timeout)", "Timeout", detail)
-        print("[Reviewer] Timeout", file=sys.stderr)
-        sys.exit(1)
-    except RuntimeError as e:
-        error_msg = str(e)[:200]
-        # Only mark unavailable for persistent service errors (auth, billing)
-        # Rate limits (429) are transient for free-tier models and should NOT trigger cooldown
-        _service_signals = ["401", "403", "500", "502", "503",
-                           "unauthorized", "quota", "billing"]
-        is_service_error = any(s in error_msg.lower() for s in _service_signals)
-        if is_service_error:
-            mark_unavailable(error_msg)
-        write_log(cwd, tool_name, "manual(error)", error_msg, detail)
-        print(f"[Reviewer] {error_msg}", file=sys.stderr)
-        sys.exit(1)
-    except Exception as e:
-        error_msg = str(e)[:200]
-        write_log(cwd, tool_name, "manual(error)", error_msg, detail)
-        print(f"[Reviewer] {error_msg}", file=sys.stderr)
+        except subprocess.TimeoutExpired:
+            last_error = "Timeout"
+            write_log(cwd, tool_name, f"retry({attempt+1}/3)", "Timeout", detail)
+        except RuntimeError as e:
+            last_error = str(e)[:200]
+            _service_signals = ["401", "403", "500", "502", "503",
+                               "unauthorized", "quota", "billing"]
+            is_service_error = any(s in last_error.lower() for s in _service_signals)
+            if is_service_error:
+                mark_unavailable(last_error)
+                break  # persistent error, no retry
+            write_log(cwd, tool_name, f"retry({attempt+1}/3)", last_error, detail)
+        except Exception as e:
+            last_error = str(e)[:200]
+            write_log(cwd, tool_name, f"retry({attempt+1}/3)", last_error, detail)
+    else:
+        # All retries exhausted
+        write_log(cwd, tool_name, "manual(error)", last_error, detail)
+        print(f"[Reviewer] {last_error}", file=sys.stderr)
         sys.exit(1)
 
 
