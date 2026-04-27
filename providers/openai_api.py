@@ -10,8 +10,26 @@ Env vars:
 
 import json
 import os
+import platform
+import sys
 import urllib.request
 import urllib.error
+
+_ROO_CODE_VERSION = "3.53.0"
+_ROO_NODE_VERSION = "v20.19.2"
+_OPENAI_SDK_VERSION = "5.12.2"
+
+
+def _stainless_headers() -> dict:
+    return {
+        "X-Stainless-Lang": "js",
+        "X-Stainless-Package-Version": _OPENAI_SDK_VERSION,
+        "X-Stainless-OS": _normalize_os(platform.system()),
+        "X-Stainless-Arch": _normalize_arch(platform.machine().lower()),
+        "X-Stainless-Runtime": "node",
+        "X-Stainless-Runtime-Version": _ROO_NODE_VERSION,
+        "X-Stainless-Retry-Count": "0",
+    }
 
 
 def review(prompt: str, timeout: int = 25) -> str:
@@ -35,7 +53,12 @@ def review(prompt: str, timeout: int = 25) -> str:
         data=request_body,
         headers={
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
+            "Accept": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            "HTTP-Referer": "https://github.com/RooVetGit/Roo-Cline",
+            "X-Title": "Roo Code",
+            "User-Agent": f"RooCode/{_ROO_CODE_VERSION}",
+            **_stainless_headers(),
         }
     )
 
@@ -53,3 +76,32 @@ def review(prompt: str, timeout: int = 25) -> str:
         except Exception:
             body = ""
         raise RuntimeError(f"HTTP {e.code}: {body}")
+
+
+def _normalize_os(system: str) -> str:
+    s = system.lower()
+    if s == "darwin":
+        return "MacOS"
+    if s == "linux":
+        return "Linux"
+    if s == "windows" or s.startswith("win"):
+        return "Windows"
+    if s == "freebsd":
+        return "FreeBSD"
+    if s == "openbsd":
+        return "OpenBSD"
+    return f"Other:{system}"
+
+
+def _normalize_arch(machine: str) -> str:
+    if machine in ("x86_64", "x64", "amd64"):
+        return "x64"
+    if machine in ("arm64", "aarch64"):
+        return "arm64"
+    if machine == "arm":
+        return "arm"
+    if machine and sys.maxsize <= 2**32:
+        return "x32"
+    if machine:
+        return f"other:{machine}"
+    return "unknown"
