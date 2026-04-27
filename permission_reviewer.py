@@ -3,16 +3,14 @@
 PermissionRequest Hook: AI-powered permission review + session permission granting.
 
 When a permission dialog is about to appear, this hook:
-1. Calls the configured LLM provider to review the tool call
+1. Calls the configured LLM provider(s) to review the tool call
 2. If approved → grants permission + writes session-level permission
    (equivalent to user selecting "Yes, don't ask again")
 3. If denied / timeout / error → exit 1, shows normal permission dialog
 
-Provider selection via PERMIT_PROVIDER env var:
-  - "codex"     — Codex CLI, uses ChatGPT subscription (default)
-  - "anthropic"  — Anthropic API, requires ANTHROPIC_API_KEY
-  - "openai"     — OpenAI API, requires OPENAI_API_KEY
-                   (also supports compatible APIs via OPENAI_BASE_URL)
+Provider selection:
+  - Env var mode: PERMIT_PROVIDER env var -> single provider (backward compatible)
+  - Config file mode: ~/.claude-auto-permit/*.json -> multi-provider with priority failover
 """
 
 import json
@@ -20,13 +18,15 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import time
 from datetime import datetime
 
-# Add project root to path so providers can be imported
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from providers import PROVIDERS
+from providers import (
+    get_active_providers,
+    mark_provider_unavailable,
+    is_provider_unavailable,
+)
 
 
 REVIEW_PROMPT_TEMPLATE = """You are a security reviewer for a Claude Code session.
@@ -58,8 +58,10 @@ Reply with ONLY a JSON object, no other text:
 
 LOG_FILE_NAME = ".claude_permission.log"
 
-UNAVAILABLE_FLAG = os.path.join(tempfile.gettempdir(), "claude_permit_unavailable.flag")
-UNAVAILABLE_TTL = 600
+_SERVICE_SIGNALS = [
+    "401", "403", "429", "500", "502", "503",
+    "unauthorized", "quota", "billing",
+]
 
 
 def write_log(cwd: str, tool_name: str, decision: str, reason: str, detail: str = ""):
@@ -76,30 +78,7 @@ def write_log(cwd: str, tool_name: str, decision: str, reason: str, detail: str 
         pass
 
 
-def mark_unavailable(reason: str):
-    try:
-        with open(UNAVAILABLE_FLAG, "w") as f:
-            f.write(reason)
-    except Exception:
-        pass
-
-
-def is_unavailable() -> str | None:
-    try:
-        if not os.path.exists(UNAVAILABLE_FLAG):
-            return None
-        age = time.time() - os.path.getmtime(UNAVAILABLE_FLAG)
-        if age > UNAVAILABLE_TTL:
-            os.remove(UNAVAILABLE_FLAG)
-            return None
-        with open(UNAVAILABLE_FLAG, "r") as f:
-            return f.read().strip() or "Provider unavailable"
-    except Exception:
-        return None
-
-
 def parse_decision(response: str) -> tuple[str, str]:
-    """Parse LLM response to extract decision JSON."""
     clean = response
     if "```" in clean:
         match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', clean, re.DOTALL)
@@ -126,28 +105,17 @@ def main():
 
     detail = tool_input.get("command", "") or tool_input.get("file_path", "") or tool_input.get("url", "")
 
-    # AskUserQuestion 必须由用户手动回答，不能自动批准
     if tool_name == "AskUserQuestion":
         write_log(cwd, tool_name, "manual(deny)", "AskUserQuestion must be answered by user", detail)
         print("[Reviewer denied] AskUserQuestion requires manual user interaction", file=sys.stderr)
         sys.exit(1)
 
-    # Select provider
-    provider_name = os.environ.get("PERMIT_PROVIDER", "codex")
-    review_fn = PROVIDERS.get(provider_name)
-    if not review_fn:
-        write_log(cwd, tool_name, "manual(bad-provider)", f"Unknown provider: {provider_name}", detail)
-        print(f"Unknown provider: {provider_name}. Available: {', '.join(PROVIDERS.keys())}", file=sys.stderr)
+    active_providers = get_active_providers()
+    if not active_providers:
+        write_log(cwd, tool_name, "manual(no-provider)", "No providers configured", detail)
+        print("No providers configured. Set PERMIT_PROVIDER or create ~/.claude-auto-permit/*.json", file=sys.stderr)
         sys.exit(1)
 
-    # Provider unavailable → exit 1, show normal dialog
-    unavailable_reason = is_unavailable()
-    if unavailable_reason:
-        write_log(cwd, tool_name, "manual(provider-down)", unavailable_reason, detail)
-        print(f"[Provider unavailable] {unavailable_reason}", file=sys.stderr)
-        sys.exit(1)
-
-    # Build prompt
     input_str = json.dumps(tool_input, ensure_ascii=False, indent=2)
     if len(input_str) > 3000:
         input_str = input_str[:3000] + "\n... (truncated)"
@@ -157,56 +125,61 @@ def main():
         tool_input=input_str
     )
 
-    # Call provider with retry (3 attempts: immediate, 1s, 2s)
-    max_attempts = 3
-    retry_delays = [0, 1, 2]
     last_error = None
 
-    for attempt in range(max_attempts):
-        if attempt > 0:
-            time.sleep(retry_delays[attempt])
-        try:
-            response = review_fn(prompt, timeout=25)
-            decision, reason = parse_decision(response)
+    for provider_name, model_name, review_fn in active_providers:
+        label = f"{provider_name}/{model_name}" if model_name else provider_name
+        unavail_reason = is_provider_unavailable(provider_name, model_name)
+        if unavail_reason:
+            write_log(cwd, tool_name, "skip", f"{label}: {unavail_reason}", detail)
+            last_error = f"{label}: {unavail_reason}"
+            continue
 
-            if decision == "approve":
-                write_log(cwd, tool_name, "allow+session", reason, detail)
-                output = {
-                    "hookSpecificOutput": {
-                        "hookEventName": "PermissionRequest",
-                        "decision": {
-                            "behavior": "allow",
-                            "updatedPermissions": permission_suggestions
+        max_attempts = 2
+
+        for attempt in range(max_attempts):
+            if attempt > 0:
+                time.sleep(1)
+            try:
+                response = review_fn(prompt, timeout=25)
+                decision, reason = parse_decision(response)
+
+                if decision == "approve":
+                    write_log(cwd, tool_name, "allow+session", f"[{label}] {reason}", detail)
+                    output = {
+                        "hookSpecificOutput": {
+                            "hookEventName": "PermissionRequest",
+                            "decision": {
+                                "behavior": "allow",
+                                "updatedPermissions": permission_suggestions
+                            }
                         }
                     }
-                }
-                print(json.dumps(output))
-            else:
-                write_log(cwd, tool_name, "manual(deny)", reason, detail)
-                print(f"[Reviewer denied] {reason}", file=sys.stderr)
-                sys.exit(1)
-            break  # success
+                    print(json.dumps(output))
+                    sys.exit(0)
+                else:
+                    write_log(cwd, tool_name, "manual(deny)", f"[{label}] {reason}", detail)
+                    print(f"[Reviewer denied] {reason}", file=sys.stderr)
+                    sys.exit(1)
 
-        except subprocess.TimeoutExpired:
-            last_error = "Timeout"
-            write_log(cwd, tool_name, f"retry({attempt+1}/3)", "Timeout", detail)
-        except RuntimeError as e:
-            last_error = str(e)[:200]
-            _service_signals = ["401", "403", "500", "502", "503",
-                               "unauthorized", "quota", "billing"]
-            is_service_error = any(s in last_error.lower() for s in _service_signals)
-            if is_service_error:
-                mark_unavailable(last_error)
-                break  # persistent error, no retry
-            write_log(cwd, tool_name, f"retry({attempt+1}/3)", last_error, detail)
-        except Exception as e:
-            last_error = str(e)[:200]
-            write_log(cwd, tool_name, f"retry({attempt+1}/3)", last_error, detail)
-    else:
-        # All retries exhausted
-        write_log(cwd, tool_name, "manual(error)", last_error, detail)
-        print(f"[Reviewer] {last_error}", file=sys.stderr)
-        sys.exit(1)
+            except subprocess.TimeoutExpired:
+                last_error = f"{label}: Timeout"
+                write_log(cwd, tool_name, f"retry({label},{attempt+1}/{max_attempts})", "Timeout", detail)
+            except RuntimeError as e:
+                err_msg = str(e)[:200]
+                last_error = f"{label}: {err_msg}"
+                if any(s in err_msg.lower() for s in _SERVICE_SIGNALS):
+                    mark_provider_unavailable(provider_name, err_msg, model_name)
+                    write_log(cwd, tool_name, "down", f"{label}: {err_msg}", detail)
+                    break
+                write_log(cwd, tool_name, f"retry({label},{attempt+1}/{max_attempts})", err_msg, detail)
+            except Exception as e:
+                last_error = f"{label}: {str(e)[:200]}"
+                write_log(cwd, tool_name, f"retry({label},{attempt+1}/{max_attempts})", last_error, detail)
+
+    write_log(cwd, tool_name, "manual(error)", last_error, detail)
+    print(f"[Reviewer] All providers failed: {last_error}", file=sys.stderr)
+    sys.exit(1)
 
 
 if __name__ == "__main__":

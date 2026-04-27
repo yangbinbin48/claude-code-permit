@@ -32,13 +32,19 @@ def _stainless_headers() -> dict:
     }
 
 
-def review(prompt: str, timeout: int = 25) -> str:
-    api_key = os.environ.get("OPENAI_API_KEY", "")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY not set")
-
-    model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-    base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1/chat/completions")
+def review(prompt: str, timeout: int = 25, *, _config: dict | None = None) -> str:
+    if _config:
+        api_key = _config.get("api_key", "")
+        if not api_key:
+            raise RuntimeError("api_key not set in config")
+        model = _config.get("model", "gpt-4o-mini")
+        base_url = _config.get("base_url", "https://api.openai.com/v1/chat/completions")
+    else:
+        api_key = os.environ.get("OPENAI_API_KEY", "")
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY not set")
+        model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+        base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1/chat/completions")
 
     body = {
         "model": model,

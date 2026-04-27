@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 
 
-def review(prompt: str, timeout: int = 25) -> str:
+def review(prompt: str, timeout: int = 25, *, _config: dict | None = None) -> str:
     out_file = os.path.join(tempfile.gettempdir(), "codex_review_out.txt")
 
     result = subprocess.run(

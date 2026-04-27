@@ -8,11 +8,13 @@ Tired of clicking "Allow" hundreds of times per session? **claude-code-permit** 
 
 ## Features
 
-- **Zero-latency local checks** — Internal tools and in-project file operations are auto-approved instantly, no network needed
-- **AI-powered review** — Bash commands, external file access, web fetches, etc. are evaluated by a secondary LLM
+- **Zero-latency local checks** — Internal tools, in-project file ops, safe Bash commands, and read-only MCP tools are auto-approved instantly, no network needed
+- **AI-powered review** — Unrecognized Bash commands, external file access, web fetches, etc. are evaluated by a secondary LLM
+- **AskUserQuestion protection** — Always falls back to manual confirmation; the AI will never auto-approve user-facing prompts
 - **Session-level permissions** — Once approved, the same type of operation won't be asked again in the current session (equivalent to "Yes, don't ask again")
-- **Graceful degradation** — If the LLM provider is down (rate limit, auth expired, timeout), falls back to manual confirmation instead of blocking
+- **Graceful degradation** — If the LLM provider is down (rate limit, auth expired, timeout), falls back to manual confirmation instead of blocking. Retries up to 3 times with backoff for transient errors
 - **Pluggable providers** — Ships with Codex CLI (ChatGPT subscription), Anthropic API, and OpenAI API. Easy to add your own
+- **SDK fingerprint masking** — Anthropic and OpenAI providers send Roo Code-style Stainless SDK headers to blend in with official SDK traffic
 - **No dependencies** — Pure Python stdlib, no pip install needed
 
 ## Architecture
@@ -21,28 +23,33 @@ Tired of clicking "Allow" hundreds of times per session? **claude-code-permit** 
 Tool call
   |
   v
-+-----------------------------+
-|  PreToolUse (local_check)   |  Fast, no network
-|  - Internal tools -> allow  |
-|  - File ops in cwd -> allow |
-|  - Everything else -> ask   |
-+-------------+---------------+
-              | "ask"
-              v
-+-----------------------------+
-|  Claude Code Permission     |  Checks existing session
-|  System                     |  permissions -> allow
-+-------------+---------------+
-              | no session permission found
-              v
-+-----------------------------+
-|  PermissionRequest          |  Calls LLM provider
-|  (permission_reviewer)      |
-|  - Approve -> allow +       |
-|    grant session permission |
-|  - Deny -> manual dialog    |
-|  - Error/timeout -> manual  |
-+-----------------------------+
++----------------------------------+
+|  PreToolUse (local_check.py)     |  Fast, no network
+|  - Internal tools -> allow       |
+|  - File ops in cwd -> allow      |
+|  - Safe Bash commands -> allow   |
+|  - Read-only MCP tools -> allow  |
+|  - AskUserQuestion -> ask        |
+|  - Everything else -> ask        |
++----------------+-----------------+
+                 | "ask"
+                 v
++----------------------------------+
+|  Claude Code Permission System   |  Checks existing session
+|                                  |  permissions -> allow
++----------------+-----------------+
+                 | no session permission found
+                 v
++----------------------------------+
+|  PermissionRequest               |  Calls LLM provider
+|  (permission_reviewer.py)        |
+|  - AskUserQuestion -> deny       |
+|  - Approve -> allow +            |
+|    grant session permission      |
+|  - Deny -> manual dialog         |
+|  - Error/timeout -> retry ->     |
+|    manual dialog                 |
++----------------------------------+
 ```
 
 ## Quick Start
@@ -154,14 +161,61 @@ That's it. Start a Claude Code session and permissions will be auto-reviewed.
 
 ### What Gets Auto-Approved Locally (no LLM call)
 
-| Category | Examples |
+#### Internal Tools (always allow)
+
+`Task`, `WebSearch`, `Agent`, `TaskCreate`, `TaskUpdate`, `TaskGet`, `TaskList`, `TaskStop`, `EnterPlanMode`, `ExitPlanMode`, `EnterWorktree`, `Skill`, `TaskOutput`, `SendMessage`, `CronCreate`, `CronDelete`, `CronList`, `ScheduleWakeup`, etc.
+
+> **Note:** `AskUserQuestion` is explicitly excluded — it always requires manual user interaction.
+
+#### File Operations Within CWD
+
+`Read`, `Write`, `Edit`, `Glob`, `Grep`, `NotebookEdit` — when the target path is inside the current working directory.
+
+#### Safe Bash Commands
+
+The following commands (and pipes/chains of them) are auto-approved:
+
+| Category | Commands |
 |---|---|
-| Internal tools | `Task`, `WebSearch`, `AskUserQuestion`, `EnterPlanMode`, `TaskCreate`, etc. |
-| File ops within cwd | `Read`, `Write`, `Edit`, `Glob`, `Grep`, `NotebookEdit` targeting project files |
+| File viewing | `ls`, `cat`, `tree`, `head`, `tail`, `less`, `more`, `file`, `stat` |
+| Search | `grep`, `egrep`, `fgrep`, `find`, `rg`, `ag`, `ack`, `which`, `whereis` |
+| Text processing (read-only) | `wc`, `sort`, `uniq`, `cut`, `tr`, `awk`, `sed`, `diff`, `comm` |
+| Output | `echo`, `printf` |
+| Git (all subcommands) | `git` |
+| Version check | `python3`, `python`, `node`, `npm`, `pnpm`, `npx`, `go`, `rustc`, `cargo` |
+| System info (read-only) | `ps`, `pgrep`, `netstat`, `ss`, `lsof`, `ip`, `uname`, `hostname`, `whoami`, `id`, `env`, `printenv`, `date`, `uptime` |
+| Package management (read-only) | `pip`, `pip3`, `dpkg`, `rpm`, `dnf` |
+| Shell builtins | `cd`, `pwd`, `export`, `source`, `bash`, `sh`, `zsh` |
+| Build/run tools | `make`, `cmake`, `docker`, `kubectl`, `helm`, `yarn`, `bun`, `deno` |
+| Other safe | `jq`, `yq`, `xargs`, `tee`, `mkdir`, `test`, `touch`, `cp`, `mv`, `chmod`, `chown`, `curl`, `wget`, `tar`, `unzip`, `gzip` |
+
+#### Dangerous Patterns (always blocked locally)
+
+These patterns trigger an `ask` decision even if the base command is in the safe list:
+
+- `rm -rf /` — destructive root deletion
+- `sudo rm` — privileged deletion
+- `> /etc/` — writing to system config
+- `chmod 777` — overly permissive
+- `git push --force` — force push
+- `curl ... | sh` / `wget ... | sh` — piped remote execution
+
+#### Read-only MCP Tools
+
+MCP tools matching these prefixes are auto-approved:
+
+- `mcp__plugin_claude-mem_mcp-search__` — code search
+- `mcp__web-search-prime__` — web search
+- `mcp__web-reader__` / `mcp__web_reader__` — web reader
+- `mcp__4_5v_mcp__` — image analysis
+- `mcp__zread__` — GitHub read-only
+- `mcp__zai-mcp-server__` — AI data analysis
+- `mcp__plugin_playwright_playwright__` — browser automation
+- `mcp__plugin_superpowers-chrome_chrome__` — Chrome browser
 
 ### What Gets AI-Reviewed
 
-Everything else — including `Bash` commands, file operations outside the project, `WebFetch`, etc. The LLM reviewer follows these rules:
+Everything that doesn't match the local rules — unrecognized Bash commands, file operations outside the project, MCP write tools, etc. The LLM reviewer follows these rules:
 
 | Decision | When |
 |---|---|
@@ -171,14 +225,24 @@ Everything else — including `Bash` commands, file operations outside the proje
 
 Customize rules by editing `REVIEW_PROMPT_TEMPLATE` in `permission_reviewer.py`.
 
+## Error Handling & Retry
+
+The permission reviewer has a built-in retry mechanism:
+
+- **Transient errors** (timeout, network) — retries up to 3 times with delays (0s, 1s, 2s)
+- **Service errors** (401, 403, 500, quota, billing) — marks the provider as unavailable and falls back to manual immediately
+- **Provider cooldown** — once marked unavailable, skips LLM calls for 10 minutes (configurable via `UNAVAILABLE_TTL` in source)
+
 ## Logging
 
 All decisions are logged to `.claude_permission.log` in your project directory:
 
 ```
-[2026-02-20 14:30:01] tool=Edit decision=allow reason=Target within cwd detail=src/main.py
-[2026-02-20 14:30:15] tool=Bash decision=allow+session reason=Standard build detail=npm run build
-[2026-02-20 14:30:22] tool=Bash decision=manual(deny) reason=Destructive op detail=rm -rf /
+[2026-04-27 09:15:00] tool=Edit decision=allow reason=Target within cwd detail=src/main.py
+[2026-04-27 09:15:10] tool=Bash decision=allow reason=Known safe command detail=npm run build
+[2026-04-27 09:15:20] tool=Bash decision=allow+session reason=Standard build detail=npm install
+[2026-04-27 09:15:30] tool=Bash decision=manual(deny) reason=Destructive op detail=rm -rf /
+[2026-04-27 09:15:40] tool=Bash decision=retry(2/3) reason=Timeout detail=some command
 ```
 
 This file is in `.gitignore` and won't be committed.
@@ -188,12 +252,12 @@ This file is in `.gitignore` and won't be committed.
 ```
 claude-code-permit/
 ├── local_check.py           # PreToolUse hook — fast local decisions
-├── permission_reviewer.py   # PermissionRequest hook — AI review
+├── permission_reviewer.py   # PermissionRequest hook — AI review + retry
 ├── providers/
 │   ├── __init__.py          # Provider registry
 │   ├── codex.py             # Codex CLI (ChatGPT subscription)
-│   ├── anthropic_api.py     # Anthropic API (stdlib only)
-│   └── openai_api.py        # OpenAI API (+ compatible APIs)
+│   ├── anthropic_api.py     # Anthropic API (stdlib + Roo Code headers)
+│   └── openai_api.py        # OpenAI API (+ compatible APIs + Roo Code headers)
 └── .gitignore
 ```
 
