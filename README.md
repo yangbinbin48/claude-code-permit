@@ -159,6 +159,69 @@ That's it. Start a Claude Code session and permissions will be auto-reviewed.
 | `OPENAI_MODEL` | No | `gpt-4o-mini` | OpenAI model ID |
 | `OPENAI_BASE_URL` | No | OpenAI default | Custom endpoint for compatible APIs |
 
+### Multi-Provider Config File Mode
+
+For more advanced setups, create JSON files in `~/.claude-auto-permit/`. Each file defines one provider with one or more models. When this directory exists, it takes precedence over env var mode.
+
+**Config file format** (`~/.claude-auto-permit/<name>.json`):
+
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `provider` | No | filename | Underlying provider type: `openai`, `anthropic`, or `codex` |
+| `priority` | No | `5` | Provider priority (0–10, lower = tried first) |
+| `api_key` | Yes | — | API key |
+| `base_url` | No | Provider default | Custom endpoint (OpenAI-compatible APIs) |
+| `model` | No | — | Single model (shorthand, same as `models` with one entry) |
+| `models` | No | — | Array of models with individual priorities (see below) |
+
+**`models` array entries:**
+
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `model` | Yes | — | Model ID |
+| `priority` | No | `5` | Model priority within provider (0–10, lower = tried first) |
+
+Models are sorted by `(provider_priority, model_priority)` and tried in order. If one model fails, the next is tried automatically. Each `(provider, model)` combination has an independent unavailability cooldown.
+
+**Example — multiple providers with multiple models:**
+
+`~/.claude-auto-permit/glm.json`:
+```json
+{
+  "provider": "openai",
+  "priority": 3,
+  "api_key": "your-key",
+  "base_url": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+  "models": [
+    {"model": "glm-4-flash", "priority": 3},
+    {"model": "glm-4.7", "priority": 5}
+  ]
+}
+```
+
+`~/.claude-auto-permit/modelscope.json`:
+```json
+{
+  "provider": "openai",
+  "priority": 5,
+  "api_key": "your-key",
+  "base_url": "https://api-inference.modelscope.cn/v1/chat/completions",
+  "models": [
+    {"model": "deepseek-ai/DeepSeek-V4-Flash", "priority": 3},
+    {"model": "Qwen/Qwen3-Coder-480B-A35B-Instruct", "priority": 5}
+  ]
+}
+```
+
+**Failover behavior:**
+1. Try `glm/glm-4-flash` (provider priority 3, model priority 3)
+2. If fails → try `glm/glm-4.7` (3, 5)
+3. If fails → try `modelscope/DeepSeek-V4-Flash` (5, 3)
+4. If fails → try `modelscope/Qwen3-Coder` (5, 5)
+5. If all fail → manual confirmation dialog
+
+**Diagnose:** Run `python diagnose.py` to test all configured models.
+
 ### What Gets Auto-Approved Locally (no LLM call)
 
 #### Internal Tools (always allow)
@@ -252,9 +315,10 @@ This file is in `.gitignore` and won't be committed.
 ```
 claude-code-permit/
 ├── local_check.py           # PreToolUse hook — fast local decisions
-├── permission_reviewer.py   # PermissionRequest hook — AI review + retry
+├── permission_reviewer.py   # PermissionRequest hook — AI review + multi-provider failover
+├── diagnose.py              # Diagnostic tool — test all configured models
 ├── providers/
-│   ├── __init__.py          # Provider registry
+│   ├── __init__.py          # Provider registry + config loader
 │   ├── codex.py             # Codex CLI (ChatGPT subscription)
 │   ├── anthropic_api.py     # Anthropic API (stdlib + Roo Code headers)
 │   └── openai_api.py        # OpenAI API (+ compatible APIs + Roo Code headers)

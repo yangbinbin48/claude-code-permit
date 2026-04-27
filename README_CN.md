@@ -159,6 +159,69 @@ export PERMIT_PROVIDER="openai"
 | `OPENAI_MODEL` | 否 | `gpt-4o-mini` | OpenAI 模型 ID |
 | `OPENAI_BASE_URL` | 否 | OpenAI 默认 | 自定义端点（兼容 API） |
 
+### 多 Provider 配置文件模式
+
+在 `~/.claude-auto-permit/` 目录下创建 JSON 文件，每个文件定义一个 provider 及其模型。该目录存在时优先于环境变量模式。
+
+**配置文件格式** (`~/.claude-auto-permit/<名称>.json`)：
+
+| 字段 | 是否必须 | 默认值 | 说明 |
+|---|---|---|---|
+| `provider` | 否 | 文件名 | 底层 provider 类型：`openai`、`anthropic` 或 `codex` |
+| `priority` | 否 | `5` | Provider 优先级（0–10，越小越优先） |
+| `api_key` | 是 | — | API Key |
+| `base_url` | 否 | Provider 默认值 | 自定义端点（兼容 API） |
+| `model` | 否 | — | 单模型（简写，等同于 `models` 只有一项） |
+| `models` | 否 | — | 模型数组，每项可单独设优先级 |
+
+**`models` 数组条目：**
+
+| 字段 | 是否必须 | 默认值 | 说明 |
+|---|---|---|---|
+| `model` | 是 | — | 模型 ID |
+| `priority` | 否 | `5` | 模型优先级（0–10，越小越优先） |
+
+模型按 `(provider_priority, model_priority)` 二级排序依次尝试，一个失败自动切换下一个。每个 `(provider, model)` 组合独立不可用冷却。
+
+**示例 — 多 provider 多模型：**
+
+`~/.claude-auto-permit/glm.json`：
+```json
+{
+  "provider": "openai",
+  "priority": 3,
+  "api_key": "your-key",
+  "base_url": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+  "models": [
+    {"model": "glm-4-flash", "priority": 3},
+    {"model": "glm-4.7", "priority": 5}
+  ]
+}
+```
+
+`~/.claude-auto-permit/modelscope.json`：
+```json
+{
+  "provider": "openai",
+  "priority": 5,
+  "api_key": "your-key",
+  "base_url": "https://api-inference.modelscope.cn/v1/chat/completions",
+  "models": [
+    {"model": "deepseek-ai/DeepSeek-V4-Flash", "priority": 3},
+    {"model": "Qwen/Qwen3-Coder-480B-A35B-Instruct", "priority": 5}
+  ]
+}
+```
+
+**故障转移顺序：**
+1. 尝试 `glm/glm-4-flash`（provider 优先级 3，model 优先级 3）
+2. 失败 → 尝试 `glm/glm-4.7`（3, 5）
+3. 失败 → 尝试 `modelscope/DeepSeek-V4-Flash`（5, 3）
+4. 失败 → 尝试 `modelscope/Qwen3-Coder`（5, 5）
+5. 全部失败 → 弹出手动确认
+
+**诊断：** 运行 `python diagnose.py` 测试所有已配置模型。
+
 ### 本地自动放行（不调用 LLM）
 
 #### 内部工具（始终放行）
@@ -252,9 +315,10 @@ export PERMIT_PROVIDER="openai"
 ```
 claude-code-permit/
 ├── local_check.py           # PreToolUse Hook — 本地快速判断
-├── permission_reviewer.py   # PermissionRequest Hook — AI 审核 + 重试
+├── permission_reviewer.py   # PermissionRequest Hook — AI 审核 + 多 Provider 故障转移
+├── diagnose.py              # 诊断工具 — 测试所有已配置模型
 ├── providers/
-│   ├── __init__.py          # Provider 注册表
+│   ├── __init__.py          # Provider 注册表 + 配置加载器
 │   ├── codex.py             # Codex CLI（ChatGPT 订阅）
 │   ├── anthropic_api.py     # Anthropic API（标准库 + Roo Code 请求头）
 │   └── openai_api.py        # OpenAI API（+ 兼容 API + Roo Code 请求头）
