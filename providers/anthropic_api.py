@@ -6,6 +6,8 @@ Env vars:
   ANTHROPIC_MODEL      — optional (default: claude-sonnet-4-5-20250514)
 """
 
+from __future__ import annotations
+
 import json
 import os
 import platform

@@ -7,6 +7,8 @@ PreToolUse Hook: 本地快速判断（不走网络）
 - 其他 → "ask" 交给权限系统（→ 可能触发 PermissionRequest hook）
 """
 
+from __future__ import annotations
+
 import json
 import os
 import re

@@ -8,6 +8,8 @@ Env vars:
                          Set this to use compatible APIs (e.g. DeepSeek, local models).
 """
 
+from __future__ import annotations
+
 import json
 import os
 import platform

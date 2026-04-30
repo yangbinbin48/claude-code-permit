@@ -4,6 +4,8 @@ Codex CLI provider — uses ChatGPT subscription, no API key needed.
 Requires: `codex` CLI installed and logged in (`codex login`).
 """
 
+from __future__ import annotations
+
 import os
 import subprocess
 import tempfile

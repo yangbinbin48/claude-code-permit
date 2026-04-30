@@ -13,6 +13,8 @@ Provider selection:
   - Config file mode: ~/.claude-auto-permit/*.json -> multi-provider with priority failover
 """
 
+from __future__ import annotations
+
 import json
 import os
 import re
