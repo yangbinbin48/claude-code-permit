@@ -82,7 +82,10 @@ def _extract_commands(command: str) -> list[str]:
         # 去掉重定向
         part = re.split(r'[<>]', part)[0].strip()
         # 取第一个词作为命令名
-        tokens = shlex.split(part)
+        try:
+            tokens = shlex.split(part)
+        except ValueError:
+            tokens = part.split()
         if tokens:
             result.append(tokens[0])
     return result
