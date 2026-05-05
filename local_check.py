@@ -162,7 +162,13 @@ def _is_safe_bash(command: str) -> bool:
 
 
 def main():
-    input_data = json.loads(sys.stdin.read())
+    try:
+        input_data = json.loads(sys.stdin.read())
+    except Exception as e:
+        print(f"[local_check] stdin 解析失败: {type(e).__name__}: {e}", file=sys.stderr)
+        output("ask", "[异常降级] stdin 解析失败")
+        return
+
     cwd = input_data.get("cwd", "")
     tool_name = input_data.get("tool_name", "unknown")
     tool_input = input_data.get("tool_input", {})
@@ -217,4 +223,13 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        print(f"[local_check] 未知错误: {type(e).__name__}: {e}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        try:
+            output("ask", "[异常降级] 未知错误")
+        except Exception:
+            pass
