@@ -33,12 +33,13 @@ def write_log(cwd: str, tool_name: str, decision: str, reason: str, detail: str 
     except Exception:
         pass
 
-FILE_TOOL_PATH_FIELDS = {
+# 只读文件工具 — 无条件放行（不限制 cwd）
+READ_ONLY_FILE_TOOLS = {"Read", "Glob", "Grep"}
+
+# 写入文件工具 — 仅 cwd 内放行
+WRITE_FILE_TOOLS_PATH_FIELDS = {
     "Edit": "file_path",
     "Write": "file_path",
-    "Read": "file_path",
-    "Glob": "path",
-    "Grep": "path",
     "NotebookEdit": "notebook_path",
 }
 
@@ -172,9 +173,16 @@ def main():
         output("allow", f"[本地放行] {tool_name}")
         return
 
-    # 文件类工具：cwd 内放行
-    if tool_name in FILE_TOOL_PATH_FIELDS:
-        path_field = FILE_TOOL_PATH_FIELDS[tool_name]
+    # 只读文件工具（Read/Glob/Grep）：无条件放行
+    if tool_name in READ_ONLY_FILE_TOOLS:
+        detail = tool_input.get("file_path", "") or tool_input.get("path", "") or ""
+        write_log(cwd, tool_name, "allow", "只读文件工具", detail)
+        output("allow", f"[本地放行] 只读: {tool_name}")
+        return
+
+    # 写入文件工具：cwd 内放行
+    if tool_name in WRITE_FILE_TOOLS_PATH_FIELDS:
+        path_field = WRITE_FILE_TOOLS_PATH_FIELDS[tool_name]
         target_path = tool_input.get(path_field)
 
         if target_path is None:
