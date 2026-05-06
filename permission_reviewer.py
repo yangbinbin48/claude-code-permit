@@ -98,7 +98,9 @@ def parse_decision(response: str) -> tuple[str, str]:
 
 
 def main():
-    input_data = json.loads(sys.stdin.read())
+    # Windows 中文系统 stdin 默认 GBK，Claude Code 发送 UTF-8，需用 buffer 读取
+    raw = sys.stdin.buffer.read().decode("utf-8")
+    input_data = json.loads(raw)
 
     cwd = input_data.get("cwd", "")
     tool_name = input_data.get("tool_name", "unknown")

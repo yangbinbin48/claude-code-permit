@@ -163,7 +163,10 @@ def _is_safe_bash(command: str) -> bool:
 
 def main():
     try:
-        input_data = json.loads(sys.stdin.read())
+        # Windows 中文系统 stdin 默认 GBK 编码，但 Claude Code 发送 UTF-8 JSON
+        # 必须用 buffer 读取原始字节再按 UTF-8 解码，否则中文字符会损坏导致 JSON 解析失败
+        raw = sys.stdin.buffer.read().decode("utf-8")
+        input_data = json.loads(raw)
     except Exception as e:
         print(f"[local_check] stdin 解析失败: {type(e).__name__}: {e}", file=sys.stderr)
         output("ask", "[异常降级] stdin 解析失败")
